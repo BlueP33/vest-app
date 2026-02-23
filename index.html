@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>VEST — Portfolio & Dépenses</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
 :root{--bg:#0a0a0f;--surface:#12121a;--surface2:#1a1a26;--border:rgba(255,255,255,0.07);--accent:#c8f135;--accent2:#6e56ff;--text:#f0f0f5;--muted:#5a5a72;--green:#4ade80;--red:#f87171;--gold:#f5c842;--blue:#38bdf8;}
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
@@ -397,8 +398,43 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
         <div style="font-family:'Syne',sans-serif;font-size:36px;font-weight:800;margin-bottom:6px" id="cnx-count">0 / 4</div>
         <div class="hero-sub neg" id="cnx-status">Aucune connexion active</div>
         <div class="hero-stats" style="margin-top:14px">
+          <div class="stat-box"><div class="sl">Base de données</div><div class="sv" id="cnx-db-val">—</div></div>
           <div class="stat-box"><div class="sl">Sync crypto</div><div class="sv" id="cnx-crypto-val">—</div></div>
           <div class="stat-box"><div class="sl">Sync courtier</div><div class="sv" id="cnx-broker-val">—</div></div>
+        </div>
+      </div>
+
+      <!-- SUPABASE -->
+      <div class="section-title">Base de données cloud</div>
+
+      <div class="cnx-card" id="cnx-supabase">
+        <div class="cnx-header">
+          <div class="cnx-logo" style="background:rgba(62,207,142,0.12);border:1px solid rgba(62,207,142,0.25);font-size:22px">⚡</div>
+          <div class="cnx-info">
+            <div class="cnx-name">Supabase</div>
+            <div class="cnx-desc" id="sb-sync-info">Connexion en cours...</div>
+          </div>
+          <div class="cnx-badge" id="badge-supabase">Connexion...</div>
+        </div>
+        <div id="sb-setup-panel" style="display:none;margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
+          <div class="cnx-warning">⚠️ Tables non trouvées. Exécute ce SQL dans ton dashboard Supabase → SQL Editor :</div>
+          <div style="background:#0a0a0f;border:1px solid rgba(200,241,53,0.2);border-radius:10px;padding:12px;font-size:10px;font-family:'DM Mono',monospace;color:var(--accent);line-height:1.7;overflow-x:auto;white-space:pre;margin-bottom:10px">create table if not exists positions (id text primary key, type text, name text, icon text, value numeric, cost numeric, qty text, date text, _source text);
+create table if not exists transactions (id text primary key, type text, name text, detail text, amount numeric, date text);
+create table if not exists expenses (id text primary key, cat text, name text, amount numeric, date text);
+create table if not exists settings (key text primary key, value text);
+alter table positions enable row level security;
+alter table transactions enable row level security;
+alter table expenses enable row level security;
+alter table settings enable row level security;
+create policy "open" on positions for all using (true) with check (true);
+create policy "open" on transactions for all using (true) with check (true);
+create policy "open" on expenses for all using (true) with check (true);
+create policy "open" on settings for all using (true) with check (true);</div>
+          <button class="cnx-btn" onclick="sbRetry()" style="background:rgba(62,207,142,0.8)">↻ Réessayer après création</button>
+        </div>
+        <div class="cnx-sync-row" style="margin-top:10px">
+          <div class="cnx-sync-time" id="sb-last-sync">Dernière sync : —</div>
+          <div class="cnx-sync-btn" onclick="sbManualSync()">↻ Sync maintenant</div>
         </div>
       </div>
 
@@ -618,7 +654,7 @@ if(!expenses) expenses=[
 if(!budget) budget=2500;
 save();
 
-function save(){localStorage.setItem('vp',JSON.stringify(positions));localStorage.setItem('vt',JSON.stringify(txList));localStorage.setItem('ve',JSON.stringify(expenses));localStorage.setItem('vb',budget);}
+function save(){localStorage.setItem('vp',JSON.stringify(positions));localStorage.setItem('vt',JSON.stringify(txList));localStorage.setItem('ve',JSON.stringify(expenses));localStorage.setItem('vb',budget);sbSave();}
 
 // CRYPTO
 const COINS={bitcoin:{sym:'BTC',icon:'₿',name:'Bitcoin'},ethereum:{sym:'ETH',icon:'Ξ',name:'Ethereum'},solana:{sym:'SOL',icon:'◎',name:'Solana'},ripple:{sym:'XRP',icon:'✕',name:'XRP'}};
@@ -825,6 +861,89 @@ document.querySelectorAll('.period').forEach(p=>{p.addEventListener('click',()=>
 renderAll();
 fetchCrypto();
 setInterval(fetchCrypto,60000);
+</script>
+
+<!-- ═══ SUPABASE INTEGRATION ═══ -->
+<script>
+const SB_URL = 'https://duafhybvmwlgdzhurlje.supabase.co';
+const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR1YWZoeWJ2bXdsZ2R6aHVybGplIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE3OTA1NzQsImV4cCI6MjA4NzM2NjU3NH0.ojpWlokIi2Scb3kpTwelsZfBu1ECz1sE7Z97WrYfXls';
+const sbClient = supabase.createClient(SB_URL, SB_KEY);
+
+let sbReady = false;
+let _sbTimer;
+
+function sbSave() {
+  clearTimeout(_sbTimer);
+  _sbTimer = setTimeout(async () => {
+    if (!sbReady) return;
+    updateSbUI('loading', 'Sync en cours...');
+    try {
+      const sid = v => String(v);
+      await Promise.all([
+        sbClient.from('positions').upsert(positions.map(p => ({...p, id: sid(p.id)}))),
+        sbClient.from('transactions').upsert(txList.map(t => ({...t, id: sid(t.id)}))),
+        sbClient.from('expenses').upsert(expenses.map(e => ({...e, id: sid(e.id)}))),
+        sbClient.from('settings').upsert([{key:'budget', value: String(budget)}])
+      ]);
+      const t = new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+      updateSbUI('ok', '✓ Cloud sync ' + t);
+    } catch(e) {
+      console.error('Supabase save:', e);
+      updateSbUI('err', 'Sync échoué');
+    }
+  }, 1500);
+}
+
+async function sbLoad() {
+  updateSbUI('loading', 'Connexion...');
+  try {
+    const [pr, tr, er, sr] = await Promise.all([
+      sbClient.from('positions').select('*'),
+      sbClient.from('transactions').select('*'),
+      sbClient.from('expenses').select('*'),
+      sbClient.from('settings').select('*')
+    ]);
+    if (pr.error) throw pr.error;
+    if (pr.data && pr.data.length) { positions = pr.data; localStorage.setItem('vp', JSON.stringify(positions)); }
+    if (tr.data && tr.data.length) { txList = tr.data; localStorage.setItem('vt', JSON.stringify(txList)); }
+    if (er.data && er.data.length) { expenses = er.data; localStorage.setItem('ve', JSON.stringify(expenses)); }
+    if (sr.data) { const b = sr.data.find(s => s.key === 'budget'); if (b) { budget = parseFloat(b.value)||budget; localStorage.setItem('vb', budget); } }
+    sbReady = true;
+    const t = new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+    updateSbUI('ok', '✓ Connecté · ' + t);
+    const sp = document.getElementById('sb-setup-panel');
+    if (sp) sp.style.display = 'none';
+    renderAll();
+  } catch(e) {
+    console.error('Supabase load:', e);
+    sbReady = false;
+    const isNoTable = e && (e.code === '42P01' || (e.message && e.message.includes('does not exist')));
+    updateSbUI('err', isNoTable ? 'Tables à créer' : 'Hors ligne');
+    if (isNoTable) { const sp = document.getElementById('sb-setup-panel'); if (sp) sp.style.display = 'block'; }
+  }
+}
+
+function sbRetry() { sbLoad(); }
+
+function sbManualSync() {
+  if (sbReady) sbSave(); else sbLoad();
+}
+
+function updateSbUI(state, text) {
+  const badge = document.getElementById('badge-supabase');
+  const card = document.getElementById('cnx-supabase');
+  const info = document.getElementById('sb-sync-info');
+  const stat = document.getElementById('cnx-db-val');
+  const last = document.getElementById('sb-last-sync');
+  if (badge) { badge.textContent = text; badge.className = 'cnx-badge'+(state==='ok'?' ok':state==='err'?' err':state==='loading'?' loading':''); }
+  if (card) card.className = 'cnx-card'+(state==='ok'?' connected':state==='err'?' error':state==='loading'?' syncing':'');
+  if (info) info.textContent = text;
+  if (stat) { stat.textContent = state==='ok'?'Cloud ✓':state==='err'?'Erreur':'Sync...'; stat.className='sv '+(state==='ok'?'green':state==='err'?'red':'gold'); }
+  if (last && state==='ok') last.textContent = 'Dernière sync : ' + new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+}
+
+// Init au chargement
+sbLoad();
 </script>
 
 <!-- ═══ AGENT STYLES + JS ═══ -->
