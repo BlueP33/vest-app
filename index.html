@@ -343,6 +343,24 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
         </div>
       </div>
 
+      <!-- API Key setup — placé avant les tips -->
+      <div id="apikey-banner" style="display:none;background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.2);border-radius:16px;padding:14px 16px;margin-bottom:16px;">
+        <div style="font-family:'Syne',sans-serif;font-size:13px;font-weight:700;color:var(--red);margin-bottom:8px">🔑 Clé API requise</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:10px;line-height:1.6">Entre ta clé API Anthropic pour activer l'agent IA. Elle est stockée uniquement dans ton navigateur.</div>
+        <div style="display:flex;gap:8px">
+          <input class="form-input" id="apikey-input" type="password" placeholder="sk-ant-..." style="flex:1;font-size:12px;padding:9px 12px">
+          <button onclick="saveApiKey()" style="padding:9px 16px;background:var(--accent);color:#0a0a0f;border:none;border-radius:12px;font-family:'Syne',sans-serif;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">Enregistrer</button>
+        </div>
+        <div style="font-size:10px;color:var(--muted);margin-top:8px">Obtiens ta clé sur <span style="color:var(--accent2)">console.anthropic.com</span></div>
+      </div>
+      <!-- Bug corrigé : display:none seul, JS gère le flex via classe -->
+      <div id="apikey-set" style="display:none;background:rgba(74,222,128,0.06);border:1px solid rgba(74,222,128,0.15);border-radius:14px;padding:11px 14px;margin-bottom:14px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div style="font-size:12px;color:var(--green)">🔑 Clé API configurée</div>
+          <span onclick="clearApiKey()" style="font-size:11px;color:var(--muted);cursor:pointer;padding:3px 8px;border:1px solid var(--border);border-radius:8px">Changer</span>
+        </div>
+      </div>
+
       <!-- 3 daily tips -->
       <div class="section-title">3 Conseils du jour <span id="tip-time" style="font-size:11px;color:var(--muted);font-weight:400"></span></div>
       <div id="tips-container">
@@ -862,11 +880,46 @@ setInterval(fetchCrypto,60000);
 .send-btn:hover{background:#8b6fff;} .send-btn:disabled{opacity:0.4;cursor:not-allowed;}
 </style>
 <script>
-let agentHistory=[];
+// Historique séparé : displayHistory pour l'UI, apiHistory pour l'API (rôles corrects)
+let apiHistory=[];
 let agentBusy=false;
 let briefingDone=false;
 let cachedTips=JSON.parse(localStorage.getItem('vest_tips')||'null');
 let lastBriefDate=localStorage.getItem('vest_brief_date')||'';
+let anthropicKey=localStorage.getItem('vest_apikey')||'';
+
+function saveApiKey(){
+  const v=document.getElementById('apikey-input').value.trim();
+  if(!v.startsWith('sk-')){alert('Clé API invalide. Elle doit commencer par sk-...');return;}
+  anthropicKey=v;
+  localStorage.setItem('vest_apikey',v);
+  document.getElementById('apikey-input').value='';
+  updateApiKeyUI();
+  generateBriefing(true);
+}
+
+function clearApiKey(){
+  anthropicKey='';
+  localStorage.removeItem('vest_apikey');
+  localStorage.removeItem('vest_tips');
+  localStorage.removeItem('vest_brief_date');
+  cachedTips=null; lastBriefDate=''; briefingDone=false;
+  apiHistory=[];
+  updateApiKeyUI();
+  document.getElementById('tips-container').innerHTML='<div class="empty-state"><div class="ei">🔑</div><p>Entre ta clé API Anthropic<br>pour activer l\'agent.</p></div>';
+}
+
+function updateApiKeyUI(){
+  const banner=document.getElementById('apikey-banner');
+  const setEl=document.getElementById('apikey-set');
+  // Bug corrigé : display:block/none uniquement, pas display:flex en inline
+  if(anthropicKey){banner.style.display='none';setEl.style.display='block';}
+  else{banner.style.display='block';setEl.style.display='none';}
+}
+
+function apiHeaders(){
+  return{'Content-Type':'application/json','x-api-key':anthropicKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'};
+}
 
 function buildSys(){
   const tv=positions.reduce((s,p)=>s+p.value,0);
@@ -891,6 +944,7 @@ ${Object.entries(byCat).map(([c,v])=>`• ${c}: ${Math.round(v)}€`).join('\n')
 }
 
 async function generateBriefing(force=false){
+  if(!anthropicKey){updateApiKeyUI();document.getElementById('tips-container').innerHTML='<div class="empty-state"><div class="ei">🔑</div><p>Entre ta clé API Anthropic<br>pour activer l\'agent.</p></div>';return;}
   const today=new Date().toDateString();
   if(!force && cachedTips && lastBriefDate===today){renderBriefing(cachedTips);briefingDone=true;return;}
   document.getElementById('tips-container').innerHTML='<div class="tip-loading"><div class="tip-spinner"></div><div style="font-size:13px;color:var(--muted);margin-top:12px">L\'agent analyse ton portefeuille...</div></div>';
@@ -898,31 +952,38 @@ async function generateBriefing(force=false){
   document.getElementById('agent-refresh').innerHTML='<span>⏳</span> Analyse...';
   try{
     const res=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',headers:{'Content-Type':'application/json'},
+      method:'POST',headers:apiHeaders(),
       body:JSON.stringify({
-        model:'claude-sonnet-4-20250514',max_tokens:1000,
+        model:'claude-sonnet-4-6',max_tokens:1200,
         system:buildSys(),
         messages:[{role:'user',content:`Génère le briefing matinal. Réponds UNIQUEMENT avec un JSON valide (sans markdown) :
 {
-  "score_sante": "A+" ou "B+" etc,
-  "score_risque": "Faible" | "Modéré" | "Élevé",
-  "score_opportunites": "X opportunités",
+  "score_sante": "A+",
+  "score_risque": "Faible",
+  "score_opportunites": "3 opportunités",
   "tips": [
     {
-      "type": "buy"|"sell"|"rebalance"|"info",
-      "priorite": "URGENT"|"RECOMMANDÉ"|"À SURVEILLER",
-      "titre": "Titre court percutant (max 7 mots)",
-      "corps": "Analyse détaillée personnalisée citant les actifs par nom. Explique pourquoi maintenant. 3-4 phrases.",
-      "action": "Texte bouton actionnable"
+      "type": "buy",
+      "priorite": "RECOMMANDÉ",
+      "titre": "Titre court max 7 mots",
+      "corps": "Analyse 3-4 phrases citant les actifs par nom.",
+      "action": "Texte bouton court"
     }
   ]
 }
-Génère 3 conseils pertinents basés sur les vraies performances du portefeuille.`}]
+Génère 3 conseils basés sur les vraies performances du portefeuille.`}]
       })
     });
+    // Bug corrigé : vérifier le statut HTTP avant de parser
+    if(!res.ok){
+      const err=await res.json().catch(()=>({}));
+      throw new Error(err.error?.message||`HTTP ${res.status}`);
+    }
     const data=await res.json();
     const raw=data.content?.[0]?.text||'';
-    const parsed=JSON.parse(raw.replace(/```json|```/g,'').trim());
+    // Extraire le JSON même si Claude enveloppe dans des backticks
+    const jsonStr=raw.replace(/```json\s*/g,'').replace(/```\s*/g,'').trim();
+    const parsed=JSON.parse(jsonStr);
     localStorage.setItem('vest_tips',JSON.stringify(parsed));
     localStorage.setItem('vest_brief_date',today);
     cachedTips=parsed; lastBriefDate=today;
@@ -930,7 +991,8 @@ Génère 3 conseils pertinents basés sur les vraies performances du portefeuill
     briefingDone=true;
     document.getElementById('nav-notif').style.display='block';
   }catch(e){
-    document.getElementById('tips-container').innerHTML='<div class="empty-state"><div class="ei">⚠️</div><p>Impossible de générer le briefing.<br>Vérifie ta connexion.</p><div onclick="generateBriefing(true)" style="margin-top:12px;padding:8px 16px;background:rgba(110,86,255,0.1);border:1px solid rgba(110,86,255,0.3);border-radius:10px;cursor:pointer;font-size:12px;color:var(--accent2)">↻ Réessayer</div></div>';
+    console.error('Briefing error:',e);
+    document.getElementById('tips-container').innerHTML=`<div class="empty-state"><div class="ei">⚠️</div><p>${escHtml(e.message||'Erreur inconnue')}</p><div onclick="generateBriefing(true)" style="margin-top:12px;padding:8px 16px;background:rgba(110,86,255,0.1);border:1px solid rgba(110,86,255,0.3);border-radius:10px;cursor:pointer;font-size:12px;color:var(--accent2)">↻ Réessayer</div></div>`;
   }
   document.getElementById('agent-refresh').innerHTML='<span>↻</span> Actualiser';
 }
@@ -945,31 +1007,40 @@ function renderBriefing(d){
   document.getElementById('score-opp-val').textContent=d.score_opportunites||'—';
   document.getElementById('score-opp-val').style.color='var(--accent)';
   document.getElementById('tip-time').textContent='Généré à '+new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
-  document.getElementById('tips-container').innerHTML=(d.tips||[]).map((tip,i)=>`
-    <div class="tip-card ${tip.type}" style="animation-delay:${i*0.1}s">
+  // Bug corrigé : stocker les titres dans un tableau global pour éviter les problèmes de guillemets dans onclick
+  window._tipTitles=[];
+  document.getElementById('tips-container').innerHTML=(d.tips||[]).map((tip,i)=>{
+    window._tipTitles[i]=tip.titre||'';
+    const type=tip.type||'info';
+    const label=type==='buy'?'ACHAT':type==='sell'?'VENTE':type==='rebalance'?'RÉÉQUILIBRAGE':'INFO';
+    return`<div class="tip-card ${type}" style="animation-delay:${i*0.1}s">
       <div class="tip-header">
-        <div class="tip-tag ${tip.type}">${tip.type==='buy'?'ACHAT':tip.type==='sell'?'VENTE':tip.type==='rebalance'?'RÉÉQUILIBRAGE':'INFO'}</div>
+        <div class="tip-tag ${type}">${label}</div>
         <div class="tip-priority">${escHtml(tip.priorite||'')}</div>
       </div>
       <div class="tip-title">${escHtml(tip.titre||'')}</div>
       <div class="tip-body">${escHtml(tip.corps||'')}</div>
-      <button class="tip-action ${tip.type}" onclick="askTip('${escHtml(tip.titre||'')}')">→ ${escHtml(tip.action||'En savoir plus')}</button>
-    </div>`).join('');
+      <button class="tip-action ${type}" onclick="askTip(${i})">→ ${escHtml(tip.action||'En savoir plus')}</button>
+    </div>`;}).join('');
 }
 
-function askTip(titre){
+function askTip(idx){
+  const titre=(window._tipTitles||[])[idx]||'ce conseil';
   const q=`Explique-moi en détail le conseil "${titre}" et comment l'appliquer concrètement.`;
-  addAiMsg('user',q);callAgentAI(q);
+  addAiMsg('user',q);
+  callAgentAI(q);
   document.getElementById('agent-chat-messages').scrollIntoView({behavior:'smooth'});
 }
 
+// Bug corrigé : addAiMsg gère UNIQUEMENT l'affichage, pas l'historique API
 function addAiMsg(role,text){
   const el=document.createElement('div');
   el.className='msg '+role;
   const t=new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
-  el.innerHTML=role==='user'?`<div class="msg-bubble">${escHtml(text)}</div><div class="msg-time">${t}</div>`:`<div class="msg-bubble">${fmtMsg(text)}</div><div class="msg-time">VEST AI · ${t}</div>`;
+  el.innerHTML=role==='user'
+    ?`<div class="msg-bubble">${escHtml(text)}</div><div class="msg-time">${t}</div>`
+    :`<div class="msg-bubble">${fmtMsg(text)}</div><div class="msg-time">VEST AI · ${t}</div>`;
   document.getElementById('agent-chat-messages').appendChild(el);
-  agentHistory.push({role,content:text});
   setTimeout(()=>{const b=document.getElementById('agent-chat-messages');b.scrollTop=b.scrollHeight;},50);
 }
 
@@ -977,20 +1048,44 @@ function showTyping2(){const el=document.createElement('div');el.className='msg 
 function hideTyping2(){const el=document.getElementById('agt');if(el)el.remove();}
 
 async function callAgentAI(text){
-  agentBusy=true;document.getElementById('agent-send-btn').disabled=true;showTyping2();
+  if(!anthropicKey){addAiMsg('ai','🔑 Configure ta clé API Anthropic pour utiliser l\'agent.');return;}
+  agentBusy=true;document.getElementById('agent-send-btn').disabled=true;
+
+  // Ajouter au display et à l'historique API (rôle 'user' correct pour Anthropic)
+  addAiMsg('user',text);
+  apiHistory.push({role:'user',content:text});
+
+  showTyping2();
   try{
-    const msgs=agentHistory.filter(m=>m.content!==text).slice(-10);
-    msgs.push({role:'user',content:text});
-    const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:500,system:buildSys(),messages:msgs})});
+    // Envoyer les 10 derniers messages max
+    const msgs=apiHistory.slice(-10);
+    const res=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',headers:apiHeaders(),
+      body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:600,system:buildSys(),messages:msgs})
+    });
+    // Bug corrigé : vérifier HTTP status
+    if(!res.ok){
+      const err=await res.json().catch(()=>({}));
+      throw new Error(err.error?.message||`HTTP ${res.status}`);
+    }
     const data=await res.json();
+    const reply=data.content?.[0]?.text||'Désolé, réessaie.';
     hideTyping2();
-    addAiMsg('ai',data.content?.[0]?.text||'Désolé, réessaie.');
-  }catch(e){hideTyping2();addAiMsg('ai','⚠️ Connexion impossible.');}
+    addAiMsg('ai',reply);
+    // Bug corrigé : rôle 'assistant' (et non 'ai') pour l'historique API Anthropic
+    apiHistory.push({role:'assistant',content:reply});
+  }catch(e){
+    console.error('Agent error:',e);
+    hideTyping2();
+    addAiMsg('ai',`⚠️ Erreur : ${escHtml(e.message||'Connexion impossible.')}`);
+    // Retirer le dernier message user de l'historique si la requête a échoué
+    apiHistory.pop();
+  }
   agentBusy=false;document.getElementById('agent-send-btn').disabled=false;
 }
 
-function sendAgentMessage(){const inp=document.getElementById('agent-input');const text=inp.value.trim();if(!text||agentBusy)return;inp.value='';autoResize(inp);addAiMsg('user',text);callAgentAI(text);}
-function agentChip(el){const t=el.textContent.trim();addAiMsg('user',t);callAgentAI(t);}
+function sendAgentMessage(){const inp=document.getElementById('agent-input');const text=inp.value.trim();if(!text||agentBusy)return;inp.value='';autoResize(inp);callAgentAI(text);}
+function agentChip(el){const t=el.textContent.trim();callAgentAI(t);}
 function handleAgentKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendAgentMessage();}}
 function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,90)+'px';}
 function fmtMsg(t){return escHtml(t).replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/\*(.*?)\*/g,'<em>$1</em>').replace(/\n/g,'<br>');}
@@ -998,9 +1093,10 @@ function escHtml(t){return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').
 
 // Patch showView to trigger briefing
 const _sv=showView;
-window.showView=function(v){_sv(v);if(v==='agent'&&!briefingDone)setTimeout(()=>generateBriefing(),200);};
+window.showView=function(v){_sv(v);if(v==='agent'){updateApiKeyUI();if(!briefingDone)setTimeout(()=>generateBriefing(),200);}};
 
 document.getElementById('agent-date').textContent=new Date().toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+updateApiKeyUI();
 </script>
 <!-- ═══ CONNEXIONS STYLES + JS ═══ -->
 <style>
