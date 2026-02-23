@@ -352,6 +352,21 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
         </div>
       </div>
 
+      <!-- API Key setup -->
+      <div id="apikey-banner" style="display:none;background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.2);border-radius:16px;padding:14px 16px;margin-bottom:16px;">
+        <div style="font-family:'Syne',sans-serif;font-size:13px;font-weight:700;color:var(--red);margin-bottom:8px">🔑 Clé API requise</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:10px;line-height:1.6">Entre ta clé API Anthropic pour activer l'agent IA. Elle est stockée uniquement dans ton navigateur.</div>
+        <div style="display:flex;gap:8px">
+          <input class="form-input" id="apikey-input" type="password" placeholder="sk-ant-..." style="flex:1;font-size:12px;padding:9px 12px">
+          <button onclick="saveApiKey()" style="padding:9px 16px;background:var(--accent);color:#0a0a0f;border:none;border-radius:12px;font-family:'Syne',sans-serif;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">Enregistrer</button>
+        </div>
+        <div style="font-size:10px;color:var(--muted);margin-top:8px">Obtiens ta clé sur <span style="color:var(--accent2)">console.anthropic.com</span></div>
+      </div>
+      <div id="apikey-set" style="display:none;background:rgba(74,222,128,0.06);border:1px solid rgba(74,222,128,0.15);border-radius:14px;padding:11px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;">
+        <div style="font-size:12px;color:var(--green)">🔑 Clé API configurée</div>
+        <span onclick="clearApiKey()" style="font-size:11px;color:var(--muted);cursor:pointer;padding:3px 8px;border:1px solid var(--border);border-radius:8px">Changer</span>
+      </div>
+
       <!-- Chat with agent -->
       <div class="section-title" style="margin-top:20px">Chat avec l'agent</div>
       <div class="agent-chat-box" id="agent-chat-messages"></div>
@@ -867,6 +882,38 @@ let agentBusy=false;
 let briefingDone=false;
 let cachedTips=JSON.parse(localStorage.getItem('vest_tips')||'null');
 let lastBriefDate=localStorage.getItem('vest_brief_date')||'';
+let anthropicKey=localStorage.getItem('vest_apikey')||'';
+
+function saveApiKey(){
+  const v=document.getElementById('apikey-input').value.trim();
+  if(!v.startsWith('sk-ant-')&&!v.startsWith('sk-')){alert('Clé API invalide. Elle doit commencer par sk-ant-...');return;}
+  anthropicKey=v;
+  localStorage.setItem('vest_apikey',v);
+  document.getElementById('apikey-input').value='';
+  updateApiKeyUI();
+  generateBriefing(true);
+}
+
+function clearApiKey(){
+  anthropicKey='';
+  localStorage.removeItem('vest_apikey');
+  localStorage.removeItem('vest_tips');
+  localStorage.removeItem('vest_brief_date');
+  cachedTips=null; lastBriefDate=''; briefingDone=false;
+  updateApiKeyUI();
+  document.getElementById('tips-container').innerHTML='<div class="tip-loading"><div class="tip-spinner"></div><div style="font-size:13px;color:var(--muted);margin-top:12px">Configure ta clé API pour démarrer...</div></div>';
+}
+
+function updateApiKeyUI(){
+  const banner=document.getElementById('apikey-banner');
+  const setEl=document.getElementById('apikey-set');
+  if(anthropicKey){banner.style.display='none';setEl.style.display='flex';}
+  else{banner.style.display='block';setEl.style.display='none';}
+}
+
+function apiHeaders(){
+  return{'Content-Type':'application/json','x-api-key':anthropicKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'};
+}
 
 function buildSys(){
   const tv=positions.reduce((s,p)=>s+p.value,0);
@@ -891,6 +938,7 @@ ${Object.entries(byCat).map(([c,v])=>`• ${c}: ${Math.round(v)}€`).join('\n')
 }
 
 async function generateBriefing(force=false){
+  if(!anthropicKey){updateApiKeyUI();document.getElementById('tips-container').innerHTML='<div class="empty-state"><div class="ei">🔑</div><p>Entre ta clé API Anthropic<br>pour activer l\'agent.</p></div>';return;}
   const today=new Date().toDateString();
   if(!force && cachedTips && lastBriefDate===today){renderBriefing(cachedTips);briefingDone=true;return;}
   document.getElementById('tips-container').innerHTML='<div class="tip-loading"><div class="tip-spinner"></div><div style="font-size:13px;color:var(--muted);margin-top:12px">L\'agent analyse ton portefeuille...</div></div>';
@@ -898,9 +946,9 @@ async function generateBriefing(force=false){
   document.getElementById('agent-refresh').innerHTML='<span>⏳</span> Analyse...';
   try{
     const res=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',headers:{'Content-Type':'application/json'},
+      method:'POST',headers:apiHeaders(),
       body:JSON.stringify({
-        model:'claude-sonnet-4-20250514',max_tokens:1000,
+        model:'claude-sonnet-4-5',max_tokens:1000,
         system:buildSys(),
         messages:[{role:'user',content:`Génère le briefing matinal. Réponds UNIQUEMENT avec un JSON valide (sans markdown) :
 {
@@ -977,11 +1025,12 @@ function showTyping2(){const el=document.createElement('div');el.className='msg 
 function hideTyping2(){const el=document.getElementById('agt');if(el)el.remove();}
 
 async function callAgentAI(text){
+  if(!anthropicKey){addAiMsg('ai','🔑 Configure ta clé API Anthropic ci-dessus pour utiliser l\'agent.');return;}
   agentBusy=true;document.getElementById('agent-send-btn').disabled=true;showTyping2();
   try{
     const msgs=agentHistory.filter(m=>m.content!==text).slice(-10);
     msgs.push({role:'user',content:text});
-    const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:500,system:buildSys(),messages:msgs})});
+    const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:apiHeaders(),body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:500,system:buildSys(),messages:msgs})});
     const data=await res.json();
     hideTyping2();
     addAiMsg('ai',data.content?.[0]?.text||'Désolé, réessaie.');
@@ -998,9 +1047,10 @@ function escHtml(t){return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').
 
 // Patch showView to trigger briefing
 const _sv=showView;
-window.showView=function(v){_sv(v);if(v==='agent'&&!briefingDone)setTimeout(()=>generateBriefing(),200);};
+window.showView=function(v){_sv(v);if(v==='agent'){updateApiKeyUI();if(!briefingDone)setTimeout(()=>generateBriefing(),200);}};
 
 document.getElementById('agent-date').textContent=new Date().toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+updateApiKeyUI();
 </script>
 <!-- ═══ CONNEXIONS STYLES + JS ═══ -->
 <style>
